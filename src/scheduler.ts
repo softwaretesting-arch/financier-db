@@ -1,7 +1,8 @@
 /**
  * Background sync. Every TICK_MS the leader runs the same tick Atlas runs: each configured financier whose last
  * scheduled sync is FINANCIER_API_PULL_MINUTES old (default 15) starts a sync, side by side, then any Aurora → EnFin
- * discovery still waiting continues. One leader across instances: a Postgres advisory lock held on its own
+ * discovery still waiting continues, then every lender in mirror mode (no login here) is copied from Atlas
+ * (src/mirror.ts). One leader across instances: a Postgres advisory lock held on its own
  * connection, so a second instance (or a redeploy overlapping the old one) never double-syncs. The leader keeps the
  * lock while its process lives; if it dies, Postgres frees the lock and the next instance takes over on its next try.
  */
@@ -9,6 +10,7 @@ import type pg from "pg";
 import { pool } from "./db";
 import { logger } from "./logger";
 import { scheduledTickWithDiscovery } from "./financier-api/store";
+import { mirrorTick } from "./mirror";
 
 const TICK_MS = Number(process.env.SCHEDULER_TICK_MS ?? 60_000);
 const LOCK_KEY = "financier-db:scheduler";
@@ -47,6 +49,7 @@ async function tick(): Promise<void> {
   try {
     if (!(await ensureLeader())) return;
     await scheduledTickWithDiscovery();
+    await mirrorTick();
     schedulerState.ticks++;
     schedulerState.lastTickAt = new Date().toISOString();
     schedulerState.lastTickError = null;

@@ -13,40 +13,14 @@ import { pool } from "../db";
 import { migrate } from "../migrate";
 import { atlasReadOnly, closeAtlas, atlasConfigured } from "../atlas-link";
 import { getBookingRuleList, setSetting } from "../settings";
+import { copyRecordsFromAtlas } from "../mirror";
 
-const BATCH = 100;
 const dry = process.argv.includes("--dry-run");
 
-interface RecordRow { id: string; financier: string; external_id: string; source: string; aurora_project_id: string | null; status: string; error: string | null; raw: unknown; fetched_at: Date | null; created_at: Date; updated_at: Date }
-
 async function copyRecords(): Promise<{ read: number; written: number }> {
-  let after = "0", read = 0, written = 0;
-  for (;;) {
-    const rows = await atlasReadOnly<RecordRow>(
-      `SELECT id::text, financier, external_id, source, aurora_project_id, status, error, raw, fetched_at, created_at, updated_at
-         FROM financier_api_records WHERE financier_api_records.id > $1::bigint ORDER BY financier_api_records.id LIMIT ${BATCH}`, [after]);
-    if (!rows.length) break;
-    read += rows.length;
-    after = rows[rows.length - 1]!.id;
-    if (dry) continue;
-    const values: unknown[] = [];
-    const tuples = rows.map((r, i) => {
-      values.push(r.financier, r.external_id, r.source, r.aurora_project_id, r.status, r.error, r.raw === null ? null : JSON.stringify(r.raw), r.fetched_at, r.created_at, r.updated_at);
-      const b = i * 10;
-      return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}::jsonb, $${b + 8}, $${b + 9}, $${b + 10})`;
-    });
-    const res = await pool.query(
-      `INSERT INTO financier_api_records (financier, external_id, source, aurora_project_id, status, error, raw, fetched_at, created_at, updated_at)
-       VALUES ${tuples.join(", ")}
-       ON CONFLICT (financier, external_id) DO UPDATE SET
-         source = excluded.source, aurora_project_id = coalesce(financier_api_records.aurora_project_id, excluded.aurora_project_id),
-         status = excluded.status, error = excluded.error, raw = excluded.raw, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at
-       WHERE financier_api_records.updated_at < excluded.updated_at`, values);
-    written += res.rowCount ?? 0;
-    process.stdout.write(`\rrecords: ${read} read, ${written} written`);
-  }
+  const out = await copyRecordsFromAtlas({ dryRun: dry, onProgress: (read, written) => process.stdout.write(`\rrecords: ${read} read, ${written} written`) });
   process.stdout.write("\n");
-  return { read, written };
+  return { read: out.read, written: out.written };
 }
 
 interface AuroraRow { aurora_project_id: string; crawled_at: Date | null; designs: number; financings: number; enfin_ids: unknown; error: string | null; created_at: Date; updated_at: Date }

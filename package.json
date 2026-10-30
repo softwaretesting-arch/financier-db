@@ -14,7 +14,8 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "import:atlas": "tsx src/scripts/import-from-atlas.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "api-key": "tsx src/scripts/api-key.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

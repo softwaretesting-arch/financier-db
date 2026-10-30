@@ -89,3 +89,12 @@ export const financierAuditTable = pgTable("financier_audit", {
 }, (t) => ({
   atIdx: index("financier_audit_at_idx").on(t.at),
 }));
+
+/** Mirror mode (src/mirror.ts): how far each financier's copy from Atlas has read. */
+export const financierMirrorStateTable = pgTable("financier_mirror_state", {
+  financier: text("financier").primaryKey(),
+  atlasUpdatedThrough: timestamp("atlas_updated_through", { withTimezone: true }),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  lastRows: integer("last_rows").notNull().default(0),
+  lastError: text("last_error"),
+});

@@ -13,7 +13,7 @@
  *   GET  /api/financier-api/:financier/records/:id/documents        its documents (Palmetto saved; GoodLeap, EnFin live)
  *   GET  /api/financier-api/:financier/records/:id/documents/:key   one document's bytes, from the lender (audited)
  *   POST /api/financier-api/:financier/lookup       { id } → ask the lender for one id and save it
- *   POST /api/financier-api/:financier/pull         Sync now, in the background (202)
+ *   POST /api/financier-api/:financier/pull         Sync now, in the background (202); in mirror mode: copy from Atlas now
  *   POST /api/financier-api/enfin/ids               { ids } → add EnFin application ids
  *   POST /api/financier-api/enfin/discover          start Aurora → EnFin discovery in the background (202)
  *   GET  /api/settings                              every setting, its value and default
@@ -27,9 +27,10 @@ import { listSettings, setSetting, SettingError } from "./settings";
 import { migrationStatus } from "./migrate";
 import { schedulerState } from "./scheduler";
 import { atlasConfigured } from "./atlas-link";
+import { mirrorRunning, mirrorStates, startMirror, syncMode } from "./mirror";
 import { addEnfinIds, enfinSettingIds, listRecordsPage, lookupById, writeRecordsCsv, startPull, startEnfinDiscovery, summary } from "./financier-api/store";
 import { asProvider, FinancierApiError, FINANCIER_API_LABELS } from "./financier-api/types";
-import { downloadDocument, getRecord, listDocuments } from "./financier-api/detail";
+import { downloadDocument, getRecord, goodleapCaseAttachments, listDocuments, palmettoSavedDocuments } from "./financier-api/detail";
 
 export const VERSION = process.env.REPLIT_GIT_COMMIT_SHA?.slice(0, 9) ?? process.env.GIT_SHA?.slice(0, 9) ?? "dev";
 const startedAt = new Date();
@@ -84,6 +85,7 @@ export function createApp() {
   app.get("/api/health", requireApiKey, wrap("health failed", async (_req, res) => {
     const d = await dbPing();
     const s = d.ok ? await summary() : null;
+    const mirrors = d.ok ? await mirrorStates() : {};
     res.status(d.ok ? 200 : 503).json({
       ok: d.ok,
       service: "financier-db",
@@ -96,8 +98,12 @@ export function createApp() {
       scheduler: { ...schedulerState, pullMinutes: s?.pullMinutes ?? null },
       aurora: s ? { configured: s.aurora, discovery: s.discovery } : null,
       financiers: s?.financiers.map((f) => ({
-        financier: f.financier, label: f.label, configured: f.configured, missing: f.missing,
-        records: f.records, ok: f.ok, notFound: f.notFound, errors: f.errors, pending: f.pending, listed: f.listed, running: f.running,
+        financier: f.financier, label: f.label,
+        // direct = its own login here; mirror = copied from Atlas (no login here); off = neither.
+        mode: syncMode(f.financier), configured: f.configured, missing: f.missing,
+        records: f.records, ok: f.ok, notFound: f.notFound, errors: f.errors, pending: f.pending, listed: f.listed,
+        running: f.running || mirrorRunning(f.financier),
+        mirror: mirrors[f.financier] ?? null,
         lastSync: f.lastPull ? { trigger: f.lastPull.trigger, startedAt: f.lastPull.startedAt, finishedAt: f.lastPull.finishedAt, found: f.lastPull.found, ok: f.lastPull.ok, errors: f.lastPull.errors, message: f.lastPull.message } : null,
       })) ?? [],
     });
@@ -145,11 +151,21 @@ export function createApp() {
 
   api.get("/financier-api/:financier/records/:id/documents", wrap("documents failed", async (req, res) => {
     res.setHeader("Cache-Control", "private, no-store");
-    res.json(await listDocuments(await getRecord(provider(req), Number(req.params.id))));
+    const p = provider(req);
+    const record = await getRecord(p, Number(req.params.id));
+    if (syncMode(p) === "direct") { res.json(await listDocuments(record)); return; }
+    // Mirror mode: file lists and bytes come live from the lender, which needs its login on this service.
+    const saved = p === "PALMETTO" ? palmettoSavedDocuments(record.raw) : p === "GOODLEAP" ? goodleapCaseAttachments(record.raw) : [];
+    res.json({
+      documents: saved.map((d) => ({ ...d, downloadable: false })),
+      note: `${FINANCIER_API_LABELS[p]} documents download live from ${FINANCIER_API_LABELS[p]}; this service copies ${FINANCIER_API_LABELS[p]} from Atlas (no ${FINANCIER_API_LABELS[p]} login here). Download them in Atlas, or set the ${FINANCIER_API_LABELS[p]} login on this service.`,
+    });
   }));
 
   api.get("/financier-api/:financier/records/:id/documents/:key", wrap("document download failed", async (req, res) => {
-    const record = await getRecord(provider(req), Number(req.params.id));
+    const p = provider(req);
+    if (syncMode(p) !== "direct") throw new FinancierApiError(503, `Documents download live from ${FINANCIER_API_LABELS[p]}; set the ${FINANCIER_API_LABELS[p]} login on this service (it copies ${FINANCIER_API_LABELS[p]} from Atlas now).`);
+    const record = await getRecord(p, Number(req.params.id));
     const key = String(req.params.key ?? "").slice(0, 200);
     const file = await downloadDocument(record, key);
     audit(req, res, "financier_api_document_download", `${record.financier}:${record.externalId}`, { key, fileName: file.fileName });
@@ -169,8 +185,10 @@ export function createApp() {
 
   api.post("/financier-api/:financier/pull", wrap("pull failed", async (req, res) => {
     const p = provider(req);
-    const out = startPull(p, String(res.locals.actor ?? "") || null);
-    audit(req, res, "financier_api_pull", p, { started: true });
+    const by = String(res.locals.actor ?? "") || null;
+    const mode = syncMode(p);
+    const out = mode === "mirror" ? startMirror(p, by) : startPull(p, by);
+    audit(req, res, "financier_api_pull", p, { started: true, mode });
     res.status(202).json(out);
   }));
 

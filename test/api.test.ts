@@ -57,7 +57,7 @@ describe.skipIf(!url)("financier-db API (real Postgres)", () => {
   it("health reports the database, migrations, scheduler and all five financiers", async () => {
     const res = await authed(request(app).get("/api/health"));
     expect(res.status).toBe(200);
-    expect(res.body.db).toMatchObject({ ok: true, migrations: { applied: 4, latest: "0004_settings_and_audit.sql" } });
+    expect(res.body.db).toMatchObject({ ok: true, migrations: { applied: 5, latest: "0005_mirror_state.sql" } });
     expect(res.body.financiers.map((f: { financier: string }) => f.financier)).toEqual(["ENFIN", "CONCERT", "GOODLEAP", "PALMETTO", "SUNRUN"]);
     const gl = res.body.financiers.find((f: { financier: string }) => f.financier === "GOODLEAP");
     expect(gl).toMatchObject({ configured: false, records: 2, ok: 2 });
@@ -137,5 +137,21 @@ describe.skipIf(!url)("financier-db API (real Postgres)", () => {
     const res = await authed(request(app).post("/api/financier-api/sunrun/pull").send({}));
     expect(res.status).toBe(503);
     expect(res.body.error).toMatch(/Sunrun is not configured/);
+  });
+
+  it("with no key secret the service makes one, keeps it, and it cannot be read or changed through the API", async () => {
+    const saved = process.env.FINANCIER_DB_API_KEYS;
+    process.env.FINANCIER_DB_API_KEYS = "";
+    const { loadApiKey, readOrCreateGeneratedKey } = await import("../src/auth");
+    expect(await loadApiKey()).toBe("generated");
+    const key = await readOrCreateGeneratedKey();
+    expect(key).toMatch(/^fdb_[0-9a-f]{48}$/);
+    expect(await readOrCreateGeneratedKey()).toBe(key);
+    expect((await request(app).get("/api/health").set("X-Api-Key", key)).status).toBe(200);
+    expect((await request(app).get("/api/health").set("X-Api-Key", KEY)).status).toBe(401);
+    const list = await request(app).get("/api/settings").set("X-Api-Key", key);
+    expect(JSON.stringify(list.body)).not.toContain(key);
+    expect((await request(app).put("/api/settings/_generated_api_key").set("X-Api-Key", key).send({ value: "x".repeat(20) })).status).toBe(400);
+    process.env.FINANCIER_DB_API_KEYS = saved;
   });
 });

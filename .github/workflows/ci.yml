@@ -19,6 +19,7 @@ jobs:
           --health-cmd "pg_isready -U test" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/financier_db_test
+      TEST_ATLAS_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/financier_db_test_atlas
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -26,6 +27,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - run: PGPASSWORD=test psql -h 127.0.0.1 -U test -d financier_db_test -c 'CREATE DATABASE financier_db_test_atlas'
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm test

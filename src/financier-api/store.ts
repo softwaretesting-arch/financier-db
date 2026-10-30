@@ -5,7 +5,8 @@
  */
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { db, financierApiPullsTable, financierApiRecordsTable, type FinancierApiRecordRow } from "../db";
-import { atlasLinkedIds as atlasLinkedIdsFromAtlas } from "../atlas-link";
+import { atlasConfigured, atlasLinkedIds as atlasLinkedIdsFromAtlas } from "../atlas-link";
+import { lookupInAtlas } from "../mirror";
 import { getBookingRuleInt, getBookingRuleList, setSettingSystem } from "../settings";
 import { logger } from "../logger";
 import { normalizeEnfinId } from "./enfin";
@@ -310,6 +311,8 @@ export async function lookupById(financier: FinancierApiProvider, raw: string): 
   const externalId = lookupIdShape(financier, raw);
   if (!externalId) throw new FinancierApiError(400, `"${raw.slice(0, 40)}" is not a ${FINANCIER_API_LABELS[financier]} id.`);
   const client = providerClient(financier);
+  // financier-db: no lender login here but Atlas linked → the project as Atlas has it (src/mirror.ts).
+  if (!client.configured() && atlasConfigured()) return lookupInAtlas(financier, externalId);
   if (!client.configured()) throw new FinancierApiError(503, `${client.label} is not configured: set ${client.missing().join(", ")}.`);
   const known: KnownId = { externalId, source: "setting" };
   const answer = await client.fetch(known);
