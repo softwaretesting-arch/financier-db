@@ -1,0 +1,42 @@
+{
+  "name": "financier-db",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Elevation Energy Solutions financier data service: pulls raw project data straight from EnFin, Concert, GoodLeap, Palmetto and Sunrun into its own Postgres, syncs every 15 minutes and serves it over a key-protected HTTP API (the backend of Atlas's API tab, standalone).",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "esbuild src/server.ts src/scripts/import-from-atlas.ts src/scripts/migrate.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --packages=external --sourcemap",
+    "start": "node --enable-source-maps dist/server.js",
+    "migrate": "tsx src/scripts/migrate.ts",
+    "import:atlas": "tsx src/scripts/import-from-atlas.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "express": "5.2.1",
+    "pg": "8.20.0",
+    "pino": "9.14.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.18.0",
+    "@types/supertest": "^6.0.0",
+    "esbuild": "0.27.3",
+    "supertest": "^7.0.0",
+    "tsx": "4.21.0",
+    "typescript": "~5.9.2",
+    "vitest": "4.1.5"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
