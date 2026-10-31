@@ -5,7 +5,7 @@
  * page flattens it into spreadsheet columns. No mapping, no filtering (owner: "they are going to be raw data").
  * EnFin and Concert first; the other financiers join the same table under their own `financier` code.
  */
-import { pgTable, serial, bigserial, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, bigint, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const financierApiRecordsTable = pgTable("financier_api_records", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -94,6 +94,7 @@ export const financierAuditTable = pgTable("financier_audit", {
 export const financierMirrorStateTable = pgTable("financier_mirror_state", {
   financier: text("financier").primaryKey(),
   atlasUpdatedThrough: timestamp("atlas_updated_through", { withTimezone: true }),
+  atlasLastId: bigint("atlas_last_id", { mode: "number" }),
   lastRunAt: timestamp("last_run_at", { withTimezone: true }),
   lastRows: integer("last_rows").notNull().default(0),
   lastError: text("last_error"),

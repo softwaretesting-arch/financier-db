@@ -27,7 +27,7 @@ import { listSettings, setSetting, SettingError } from "./settings";
 import { migrationStatus } from "./migrate";
 import { schedulerState } from "./scheduler";
 import { atlasConfigured } from "./atlas-link";
-import { mirrorRunning, mirrorStates, startMirror, syncMode } from "./mirror";
+import { compareWithAtlas, mirrorRunning, mirrorStates, startMirror, syncMode } from "./mirror";
 import { addEnfinIds, enfinSettingIds, listRecordsPage, lookupById, writeRecordsCsv, startPull, startEnfinDiscovery, summary } from "./financier-api/store";
 import { asProvider, FinancierApiError, FINANCIER_API_LABELS, FINANCIER_API_PROVIDERS, type FinancierApiProvider } from "./financier-api/types";
 import { downloadDocument, getRecord, goodleapCaseAttachments, listDocuments, palmettoSavedDocuments } from "./financier-api/detail";
@@ -64,8 +64,14 @@ async function dbPing(): Promise<{ ok: boolean; latencyMs: number; error?: strin
   }
 }
 
+function copiedPercent(c: { atlas: number | null; here: number } | undefined): number | null {
+  if (!c || c.atlas === null) return null;
+  return c.atlas === 0 ? 100 : Math.min(100, Math.floor((100 * c.here) / c.atlas));
+}
+
 async function setupChecks() {
   const states = await mirrorStates();
+  const compare = await compareWithAtlas();
   const last = await pool.query<{ financier: string; finished: Date | null; has_data: boolean }>(
     `SELECT f.financier, (SELECT max(finished_at) FROM financier_api_pulls p WHERE p.financier = f.financier) AS finished,
             EXISTS (SELECT 1 FROM financier_api_records r WHERE r.financier = f.financier AND r.status = 'ok') AS has_data
@@ -80,6 +86,9 @@ async function setupChecks() {
       hasData: r.has_data,
       lastSyncAt: r.finished?.toISOString() ?? null,
       lastCopyError: states[r.financier]?.lastError ? true : false,
+      // Has every project Atlas has (null: Atlas not linked or not reachable). A share, not a count.
+      sameAsAtlas: compare[r.financier]?.same ?? null,
+      copiedPercent: copiedPercent(compare[r.financier]),
     }])),
   };
 }
@@ -111,6 +120,7 @@ export function createApp() {
     const d = await dbPing();
     const s = d.ok ? await summary() : null;
     const mirrors = d.ok ? await mirrorStates() : {};
+    const compare = d.ok ? await compareWithAtlas({ fresh: true }) : {};
     res.status(d.ok ? 200 : 503).json({
       ok: d.ok,
       service: "financier-db",
@@ -129,6 +139,8 @@ export function createApp() {
         records: f.records, ok: f.ok, notFound: f.notFound, errors: f.errors, pending: f.pending, listed: f.listed,
         running: f.running || mirrorRunning(f.financier),
         mirror: mirrors[f.financier] ?? null,
+        atlasRecords: compare[f.financier]?.atlas ?? null,
+        sameAsAtlas: compare[f.financier]?.same ?? null,
         lastSync: f.lastPull ? { trigger: f.lastPull.trigger, startedAt: f.lastPull.startedAt, finishedAt: f.lastPull.finishedAt, found: f.lastPull.found, ok: f.lastPull.ok, errors: f.lastPull.errors, message: f.lastPull.message } : null,
       })) ?? [],
     });

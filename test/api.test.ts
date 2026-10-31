@@ -62,7 +62,7 @@ describe.skipIf(!url)("financier-db API (real Postgres)", () => {
   it("health reports the database, migrations, scheduler and all five financiers", async () => {
     const res = await authed(request(app).get("/api/health"));
     expect(res.status).toBe(200);
-    expect(res.body.db).toMatchObject({ ok: true, migrations: { applied: 5, latest: "0005_mirror_state.sql" } });
+    expect(res.body.db).toMatchObject({ ok: true, migrations: { applied: 6, latest: "0006_mirror_cursor.sql" } });
     expect(res.body.financiers.map((f: { financier: string }) => f.financier)).toEqual(["ENFIN", "CONCERT", "GOODLEAP", "PALMETTO", "SUNRUN"]);
     const gl = res.body.financiers.find((f: { financier: string }) => f.financier === "GOODLEAP");
     expect(gl).toMatchObject({ configured: false, records: 2, ok: 2 });

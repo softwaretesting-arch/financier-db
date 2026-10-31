@@ -105,7 +105,7 @@ Same keys and defaults as Atlas's Admin → System entries:
 
 - **Migrations** (`migrations/*.sql`) apply at boot, each once, recorded in `schema_migrations`. 0001–0003 are
   Atlas's 0422, 0423 and 0429 (same tables, so rows copy between the two databases). 0004 adds `financier_settings`
-  and `financier_audit`; 0005 adds `financier_mirror_state`.
+  and `financier_audit`; 0005 adds `financier_mirror_state`; 0006 adds its resume cursor.
 - **Sync**: every minute the leader checks which lenders are due (last scheduled sync at least
   `FINANCIER_API_PULL_MINUTES` ago) and starts them side by side. Then it continues any Aurora discovery still waiting.
   One instance leads, using a Postgres advisory lock: two copies never sync twice. If the leader stops, another instance
@@ -117,9 +117,12 @@ Same keys and defaults as Atlas's Admin → System entries:
 - **Keys**: without `FINANCIER_DB_API_KEYS` the service uses the key it made for itself (`pnpm api-key`). With it, it
   uses those keys instead: several keys separated by commas. To rotate, add the new one, move the callers, then remove
   the old one. There is never a keyless mode: with no key at all every route except `/api/healthz` answers 503.
-- **Mirror**: `financier_mirror_state` records how far each lender's copy from Atlas has read. Each copy re-reads the
-  last 5 seconds, so a row Atlas changed in the same second isn't missed. Copies show in the summary as syncs with
-  trigger `mirror`.
+- **Mirror**: each lender's copy from Atlas reads Atlas's rows in (updated_at, id) order and saves its place after every
+  batch (`financier_mirror_state`). A copy cut short by a deploy or restart resumes where it stopped on the next tick.
+  Palmetto moves 25 rows at a time because its rows are large. An empty database fills in about 2 minutes (3,380
+  projects in testing). Copies show in the summary as syncs with trigger `mirror`.
+- **Same as Atlas?** `/api/healthz` shows `sameAsAtlas` and `copiedPercent` per lender (Atlas count at most 5 minutes
+  old). `/api/health` (key) shows both counts, counted fresh.
 
 ## Develop
 
