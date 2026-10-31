@@ -81,6 +81,10 @@ describe.skipIf(!url || !atlasUrl)("mirror mode: copy from Atlas when no lender 
     expect(res.body.setup.lenders.goodleap).toMatchObject({ mode: "mirror", sameAsAtlas: true, copiedPercent: 100 });
     expect(res.body.setup.lenders.sunrun).toMatchObject({ sameAsAtlas: true, copiedPercent: 100 });
     expect(res.body.setup.lenders.palmetto).toMatchObject({ sameAsAtlas: false, copiedPercent: 0 });
+    // Atlas copies and direct reads are shown apart (here: copies only, no lender login).
+    expect(res.body.setup.lenders.goodleap.fromAtlas).toMatchObject({ running: false, failed: false });
+    expect(res.body.setup.lenders.goodleap.fromLender).toBeNull();
+    expect(health.body.financiers.find((f: { financier: string }) => f.financier === "GOODLEAP").fromAtlas).toMatchObject({ found: expect.any(Number), message: expect.stringMatching(/Copied from Atlas/) });
   });
 
   it("direct lenders keep Atlas as a fallback: a fresher direct read is never overwritten, a project Atlas has and we lack is filled", async () => {
@@ -120,6 +124,20 @@ describe.skipIf(!url || !atlasUrl)("mirror mode: copy from Atlas when no lender 
     const pulls = await pool.query("SELECT message, finished_at IS NOT NULL AS done FROM financier_api_pulls WHERE financier = 'CONCERT' ORDER BY id");
     expect(pulls.rows[0]).toMatchObject({ done: true, message: expect.stringMatching(/Interrupted/) });
     expect(pulls.rows).toHaveLength(2);
+  });
+
+  it("taking over the sync closes runs a dead process left open, and they start again at once", async () => {
+    await pool.query("INSERT INTO financier_api_pulls (financier, trigger, started_at) VALUES ('ENFIN', 'schedule', now()), ('SUNRUN', 'mirror', now())");
+    const { closeInterrupted } = await import("../src/scheduler");
+    await closeInterrupted();
+    const open = await pool.query("SELECT count(*)::int AS n FROM financier_api_pulls WHERE finished_at IS NULL");
+    expect(open.rows[0].n).toBe(0);
+    const { mirrorTick, mirrorRunning } = await import("../src/mirror");
+    const before = await pool.query("SELECT count(*)::int AS n FROM financier_api_pulls WHERE financier = 'SUNRUN' AND trigger = 'mirror'");
+    await mirrorTick();
+    for (let i = 0; i < 100 && ["ENFIN", "CONCERT", "GOODLEAP", "PALMETTO", "SUNRUN"].some((f) => mirrorRunning(f as never)); i++) await new Promise((r) => setTimeout(r, 100));
+    const after = await pool.query("SELECT count(*)::int AS n FROM financier_api_pulls WHERE financier = 'SUNRUN' AND trigger = 'mirror'");
+    expect(after.rows[0].n).toBe(before.rows[0].n + 1);
   });
 
   it("Sync copies from Atlas (202, mode mirror) instead of refusing", async () => {

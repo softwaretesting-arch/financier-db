@@ -173,11 +173,11 @@ export async function mirrorTick(): Promise<void> {
     // Mirror-mode lenders get their data this way; direct lenders get Atlas as a fallback that fills what their own
     // pull missed or could not read (only fresher reads are kept, see upsertAtlasRecords).
     if (mirroring.has(f)) continue;
-    const [last] = await db.select({ id: financierApiPullsTable.id, startedAt: financierApiPullsTable.startedAt, finishedAt: financierApiPullsTable.finishedAt }).from(financierApiPullsTable)
+    const [last] = await db.select({ id: financierApiPullsTable.id, startedAt: financierApiPullsTable.startedAt, finishedAt: financierApiPullsTable.finishedAt, message: financierApiPullsTable.message }).from(financierApiPullsTable)
       .where(and(eq(financierApiPullsTable.financier, f), eq(financierApiPullsTable.trigger, "mirror"))).orderBy(desc(financierApiPullsTable.startedAt)).limit(1);
     if (last && !last.finishedAt) {
       await db.update(financierApiPullsTable).set({ finishedAt: new Date(), message: "Interrupted (the service restarted); resumed from where it stopped." }).where(eq(financierApiPullsTable.id, last.id));
-    } else if (last && Date.now() - last.startedAt.getTime() < minutes * 60_000 - 60_000) continue;
+    } else if (last && !last.message?.startsWith("Interrupted") && Date.now() - last.startedAt.getTime() < minutes * 60_000 - 60_000) continue;
     void mirrorFinancier(f, null).catch((err) => logger.warn({ err, financier: f }, "[mirror] scheduled copy failed"));
   }
 }

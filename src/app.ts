@@ -69,9 +69,41 @@ function copiedPercent(c: { atlas: number | null; here: number } | undefined): n
   return c.atlas === 0 ? 100 : Math.min(100, Math.floor((100 * c.here) / c.atlas));
 }
 
+/** The latest direct read from the lender and the latest copy from Atlas, per lender (one query, both kinds). */
+async function lastRuns(): Promise<Map<string, { direct?: PullRow; atlas?: PullRow }>> {
+  const res = await pool.query<PullRow & { financier: string; kind: "direct" | "atlas" }>(
+    `SELECT DISTINCT ON (financier, kind) financier, kind, started_at, finished_at, found, ok, errors, message
+       FROM (SELECT *, CASE WHEN trigger = 'mirror' THEN 'atlas' ELSE 'direct' END AS kind FROM financier_api_pulls) p
+      WHERE trigger <> 'discover'
+      ORDER BY financier, kind, started_at DESC`);
+  const out = new Map<string, { direct?: PullRow; atlas?: PullRow }>();
+  for (const r of res.rows) out.set(r.financier, { ...out.get(r.financier), [r.kind]: r });
+  return out;
+}
+interface PullRow { started_at: Date; finished_at: Date | null; found: number; ok: number; errors: number; message: string | null }
+
+/** Public view of one run: times and whether it worked, never counts or messages. */
+function publicRun(r: PullRow | undefined) {
+  if (!r) return null;
+  return {
+    startedAt: r.started_at.toISOString(),
+    finishedAt: r.finished_at?.toISOString() ?? null,
+    running: !r.finished_at,
+    newData: r.finished_at ? r.ok > 0 : null,
+    failed: r.finished_at ? r.errors > 0 || /fail|not configured|interrupted/i.test(r.message ?? "") : null,
+  };
+}
+
+/** Keyed view of one run: everything, counts and message included. */
+function fullRun(r: PullRow | undefined) {
+  if (!r) return null;
+  return { startedAt: r.started_at, finishedAt: r.finished_at, found: r.found, saved: r.ok, errors: r.errors, message: r.message };
+}
+
 async function setupChecks() {
   const states = await mirrorStates();
   const compare = await compareWithAtlas();
+  const runs = await lastRuns();
   const last = await pool.query<{ financier: string; finished: Date | null; has_data: boolean }>(
     `SELECT f.financier, (SELECT max(finished_at) FROM financier_api_pulls p WHERE p.financier = f.financier) AS finished,
             EXISTS (SELECT 1 FROM financier_api_records r WHERE r.financier = f.financier AND r.status = 'ok') AS has_data
@@ -86,6 +118,9 @@ async function setupChecks() {
       fallbackFromAtlas: atlasConfigured() && syncMode(r.financier as FinancierApiProvider) === "direct",
       hasData: r.has_data,
       lastSyncAt: r.finished?.toISOString() ?? null,
+      // The latest read straight from the lender's API, and the latest copy from Atlas.
+      fromLender: publicRun(runs.get(r.financier)?.direct),
+      fromAtlas: publicRun(runs.get(r.financier)?.atlas),
       lastCopyError: states[r.financier]?.lastError ? true : false,
       // Has every project Atlas has (null: Atlas not linked or not reachable). A share, not a count.
       sameAsAtlas: compare[r.financier]?.same ?? null,
@@ -122,6 +157,7 @@ export function createApp() {
     const s = d.ok ? await summary() : null;
     const mirrors = d.ok ? await mirrorStates() : {};
     const compare = d.ok ? await compareWithAtlas({ fresh: true }) : {};
+    const runs = d.ok ? await lastRuns() : new Map<string, { direct?: PullRow; atlas?: PullRow }>();
     res.status(d.ok ? 200 : 503).json({
       ok: d.ok,
       service: "financier-db",
@@ -141,6 +177,8 @@ export function createApp() {
         running: f.running || mirrorRunning(f.financier),
         mirror: mirrors[f.financier] ?? null,
         atlasRecords: compare[f.financier]?.atlas ?? null,
+        fromLender: fullRun(runs.get(f.financier)?.direct),
+        fromAtlas: fullRun(runs.get(f.financier)?.atlas),
         sameAsAtlas: compare[f.financier]?.same ?? null,
         lastSync: f.lastPull ? { trigger: f.lastPull.trigger, startedAt: f.lastPull.startedAt, finishedAt: f.lastPull.finishedAt, found: f.lastPull.found, ok: f.lastPull.ok, errors: f.lastPull.errors, message: f.lastPull.message } : null,
       })) ?? [],

@@ -420,8 +420,10 @@ export async function scheduledTick(): Promise<void> {
   for (const f of FINANCIER_API_PROVIDERS) {
     if (!providerClient(f).configured() || running.has(f)) continue;
     const [last] = await db.select().from(financierApiPullsTable).where(and(eq(financierApiPullsTable.financier, f), eq(financierApiPullsTable.trigger, "schedule"))).orderBy(desc(financierApiPullsTable.startedAt)).limit(1);
-    // A minute of slack so a 15-minute setting is not skipped by a tick that lands a few seconds early.
-    if (last && Date.now() - last.startedAt.getTime() < minutes * 60_000 - 60_000) continue;
+    // A minute of slack so a 15-minute setting is not skipped by a tick that lands a few seconds early. A pull cut short
+    // by a restart (closed as interrupted when this process took the sync over) runs again now (financier-db).
+    const interrupted = last?.message?.startsWith("Interrupted") ?? false;
+    if (last && !interrupted && Date.now() - last.startedAt.getTime() < minutes * 60_000 - 60_000) continue;
     void runPull(f, "schedule", null).catch((err) => logger.warn({ err, financier: f }, "[financier-api] scheduled pull failed"));
   }
 }

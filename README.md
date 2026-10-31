@@ -126,6 +126,11 @@ Same keys and defaults as Atlas's Admin → System entries:
   batch (`financier_mirror_state`). A copy cut short by a deploy or restart resumes where it stopped on the next tick.
   Palmetto moves 25 rows at a time because its rows are large. An empty database fills in about 2 minutes (3,380
   projects in testing). Copies show in the summary as syncs with trigger `mirror`.
+- **Where did the data come from?** `/api/healthz` shows, per lender, `fromLender` (the latest read straight from the
+  lender's API) and `fromAtlas` (the latest copy from Atlas): start and finish time, `running`, `newData`, `failed`.
+  `/api/health` (key) adds the counts and messages.
+- **Restarts**: the instance that takes the sync over closes the syncs a stopped instance left open (message
+  "Interrupted …"), and those start again on the next tick instead of waiting 15 minutes.
 - **Same as Atlas?** `/api/healthz` shows `sameAsAtlas` and `copiedPercent` per lender (Atlas count at most 5 minutes
   old). `/api/health` (key) shows both counts, counted fresh.
 

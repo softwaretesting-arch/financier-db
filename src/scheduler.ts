@@ -34,13 +34,32 @@ async function ensureLeader(): Promise<boolean> {
     lockClient ??= await pool.connect();
     const res = await lockClient.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [LOCK_KEY]);
     schedulerState.leader = res.rows[0]?.ok === true;
-    if (schedulerState.leader) logger.info("[scheduler] this instance is the sync leader");
+    if (schedulerState.leader) {
+      logger.info("[scheduler] this instance is the sync leader");
+      await closeInterrupted();
+    }
     else { lockClient.release(); lockClient = null; }
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[scheduler] leader check failed");
     lockClient?.release(true); lockClient = null; schedulerState.leader = false;
   }
   return schedulerState.leader;
+}
+
+/**
+ * The previous leader is gone (it released the lock by dying or stopping), so any sync it left unfinished will never
+ * finish: mark those as interrupted. The next tick then starts them again at once instead of waiting out the interval
+ * (direct pulls: store.ts scheduledTick; Atlas copies: mirror.ts mirrorTick, which also resumes from its cursor).
+ */
+export async function closeInterrupted(): Promise<void> {
+  try {
+    const res = await pool.query(
+      `UPDATE financier_api_pulls SET finished_at = now(), message = 'Interrupted (the service restarted); started again.'
+        WHERE finished_at IS NULL`);
+    if (res.rowCount) logger.info({ closed: res.rowCount }, "[scheduler] closed syncs cut short by a restart");
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[scheduler] closing interrupted syncs failed");
+  }
 }
 
 async function tick(): Promise<void> {
