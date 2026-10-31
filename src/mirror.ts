@@ -5,7 +5,9 @@
  * reads Atlas's rows that changed since the last copy (updated_at) and upserts them here; a row here is replaced only
  * by a newer one. Setting a lender's own login switches that lender to direct pulls on the next tick.
  *
- * Mode per lender: direct (its login is set) → mirror (Atlas link set) → off.
+ * Mode per lender: direct (its login is set) → mirror (Atlas link set) → off. With the Atlas link set, a direct lender
+ * is also copied from Atlas on the same schedule as a fallback: whichever side read a project from the lender more
+ * recently wins, so the direct pull leads and Atlas fills what it missed or failed to read.
  */
 import { and, desc, eq } from "drizzle-orm";
 import { db, financierApiPullsTable, financierMirrorStateTable, pool } from "./db";
@@ -34,7 +36,12 @@ interface AtlasRecordRow { id: string; financier: string; external_id: string; s
 
 const COLUMNS = "id::text AS id, financier, external_id, source, aurora_project_id, status, error, raw::text AS raw, fetched_at, created_at, updated_at, updated_at::text AS updated_at_text";
 
-/** Upserts Atlas rows here; a row is replaced only when Atlas's copy is newer. Returns how many were written. */
+/**
+ * Upserts Atlas rows here. A row here is replaced only when Atlas read the lender more recently (fetched_at), so an
+ * older Atlas copy never overwrites a fresher direct read, and a failed read on either side (which keeps fetched_at)
+ * never replaces good data. Rows nobody has read from the lender yet (listed / pending) follow updated_at. Returns how
+ * many were written.
+ */
 export async function upsertAtlasRecords(rows: AtlasRecordRow[]): Promise<number> {
   if (!rows.length) return 0;
   const values: unknown[] = [];
@@ -49,7 +56,8 @@ export async function upsertAtlasRecords(rows: AtlasRecordRow[]): Promise<number
      ON CONFLICT (financier, external_id) DO UPDATE SET
        source = excluded.source, aurora_project_id = coalesce(financier_api_records.aurora_project_id, excluded.aurora_project_id),
        status = excluded.status, error = excluded.error, raw = excluded.raw, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at
-     WHERE financier_api_records.updated_at < excluded.updated_at`, values);
+     WHERE (excluded.fetched_at IS NOT NULL AND (financier_api_records.fetched_at IS NULL OR excluded.fetched_at > financier_api_records.fetched_at))
+        OR (excluded.fetched_at IS NULL AND financier_api_records.fetched_at IS NULL AND excluded.updated_at > financier_api_records.updated_at)`, values);
   return res.rowCount ?? 0;
 }
 
@@ -162,7 +170,9 @@ export async function mirrorTick(): Promise<void> {
   const minutes = await getBookingRuleInt("FINANCIER_API_PULL_MINUTES");
   if (minutes <= 0) return;
   for (const f of FINANCIER_API_PROVIDERS) {
-    if (syncMode(f) !== "mirror" || mirroring.has(f)) continue;
+    // Mirror-mode lenders get their data this way; direct lenders get Atlas as a fallback that fills what their own
+    // pull missed or could not read (only fresher reads are kept, see upsertAtlasRecords).
+    if (mirroring.has(f)) continue;
     const [last] = await db.select({ id: financierApiPullsTable.id, startedAt: financierApiPullsTable.startedAt, finishedAt: financierApiPullsTable.finishedAt }).from(financierApiPullsTable)
       .where(and(eq(financierApiPullsTable.financier, f), eq(financierApiPullsTable.trigger, "mirror"))).orderBy(desc(financierApiPullsTable.startedAt)).limit(1);
     if (last && !last.finishedAt) {

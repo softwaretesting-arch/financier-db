@@ -83,6 +83,7 @@ async function setupChecks() {
     lastTickAt: schedulerState.lastTickAt,
     lenders: Object.fromEntries(last.rows.map((r) => [r.financier.toLowerCase(), {
       mode: syncMode(r.financier as FinancierApiProvider),
+      fallbackFromAtlas: atlasConfigured() && syncMode(r.financier as FinancierApiProvider) === "direct",
       hasData: r.has_data,
       lastSyncAt: r.finished?.toISOString() ?? null,
       lastCopyError: states[r.financier]?.lastError ? true : false,
@@ -135,7 +136,7 @@ export function createApp() {
       financiers: s?.financiers.map((f) => ({
         financier: f.financier, label: f.label,
         // direct = its own login here; mirror = copied from Atlas (no login here); off = neither.
-        mode: syncMode(f.financier), configured: f.configured, missing: f.missing,
+        mode: syncMode(f.financier), fallbackFromAtlas: atlasConfigured() && syncMode(f.financier) === "direct", configured: f.configured, missing: f.missing,
         records: f.records, ok: f.ok, notFound: f.notFound, errors: f.errors, pending: f.pending, listed: f.listed,
         running: f.running || mirrorRunning(f.financier),
         mirror: mirrors[f.financier] ?? null,

@@ -35,14 +35,19 @@ as little as possible. **No lender login has to be copied from Atlas.**
 
 | Mode | When | Where the data comes from |
 |---|---|---|
-| `direct` | That lender's login is set on this service (see `.env.example`) | The lender itself, every 15 minutes. Independent of Atlas. |
-| `mirror` | No login for that lender here, `ATLAS_READONLY_DATABASE_URL` set | Atlas's saved copy, every 15 minutes. Atlas must keep syncing that lender. |
+| `direct` | That lender's login is set on this service (names in `.env.example`, same as Atlas) | The lender itself, every 15 minutes. With `ATLAS_READONLY_DATABASE_URL` also set, Atlas is the **fallback** (`fallbackFromAtlas: true`). |
+| `mirror` | No login for that lender here, `ATLAS_READONLY_DATABASE_URL` set | Atlas's saved copy, every 15 minutes. |
 | `off` | Neither | Nothing new; what is already saved stays readable. |
 
-Adding a lender's login later switches that lender to `direct` on the next tick; nothing else changes. In mirror mode
-a few things need the lender itself and say so instead of failing silently:
-- Document **downloads** answer 503. Download them in Atlas, or add the lender's login here.
-- **Lookup** of a single ID returns the project as Atlas has it. If Atlas doesn't have it, the answer is `not_in_atlas`.
+**Recommended: direct + fallback.** Paste the lender logins from Atlas's Secrets into this Repl's Secrets and keep
+`ATLAS_READONLY_DATABASE_URL`. Every 15 minutes each lender is read directly, and Atlas's copy fills whatever the direct
+pull missed or couldn't read. For every project, whichever side read it from the lender most recently wins. An older
+Atlas copy never overwrites a fresher direct read, and a failed read on either side never replaces good data.
+
+Adding a lender's login switches that lender to `direct` on the next tick. In plain `mirror` mode, a few things need
+the lender itself and say so instead of failing silently:
+- Document **downloads** answer 503.
+- **Lookup** of a single ID returns Atlas's copy (`not_in_atlas` when Atlas lacks it).
 - **Aurora → EnFin discovery** runs only with the Aurora secrets set.
 
 The Atlas link only reads: every query runs in a READ ONLY transaction, so even a login that could write is refused by

@@ -51,7 +51,7 @@ describe.skipIf(!url || !atlasUrl)("mirror mode: copy from Atlas when no lender 
     const { mirrorFinancier } = await import("../src/mirror");
     expect(await mirrorFinancier("GOODLEAP", null)).toEqual({ read: 2, written: 2 });
     expect(await mirrorFinancier("GOODLEAP", null)).toEqual({ read: 0, written: 0 });
-    await atlas.query(`UPDATE financier_api_records SET raw = '{"loan":{"id":"26-41-006049","status":"FUNDED"}}', updated_at = now() WHERE external_id = '26-41-006049'`);
+    await atlas.query(`UPDATE financier_api_records SET raw = '{"loan":{"id":"26-41-006049","status":"FUNDED"}}', fetched_at = now(), updated_at = now() WHERE external_id = '26-41-006049'`);
     expect(await mirrorFinancier("GOODLEAP", null)).toEqual({ read: 1, written: 1 });
     expect(await mirrorFinancier("GOODLEAP", null)).toEqual({ read: 0, written: 0 });
     const row = await pool.query("SELECT raw->'loan'->>'status' AS s FROM financier_api_records WHERE external_id = '26-41-006049'");
@@ -81,6 +81,27 @@ describe.skipIf(!url || !atlasUrl)("mirror mode: copy from Atlas when no lender 
     expect(res.body.setup.lenders.goodleap).toMatchObject({ mode: "mirror", sameAsAtlas: true, copiedPercent: 100 });
     expect(res.body.setup.lenders.sunrun).toMatchObject({ sameAsAtlas: true, copiedPercent: 100 });
     expect(res.body.setup.lenders.palmetto).toMatchObject({ sameAsAtlas: false, copiedPercent: 0 });
+  });
+
+  it("direct lenders keep Atlas as a fallback: a fresher direct read is never overwritten, a project Atlas has and we lack is filled", async () => {
+    const { upsertAtlasRecords } = await import("../src/mirror");
+    await pool.query(`INSERT INTO financier_api_records (financier, external_id, source, status, raw, fetched_at, updated_at)
+      VALUES ('GOODLEAP', 'DIRECT-1', 'list', 'ok', '{"loan":{"v":"direct"}}', now(), now())`);
+    const older = new Date(Date.now() - 3_600_000);
+    const row = (externalId: string, v: string, fetched: Date | null) => ({ id: "0", financier: "GOODLEAP", external_id: externalId, source: "list", aurora_project_id: null, status: "ok", error: null,
+      raw: JSON.stringify({ loan: { v } }), fetched_at: fetched, created_at: older, updated_at: new Date(), updated_at_text: new Date().toISOString() });
+    // Atlas read it an hour ago: ours (read now) stays.
+    expect(await upsertAtlasRecords([row("DIRECT-1", "atlas-old", older)])).toBe(0);
+    // Atlas's failed read (no fetched_at) never replaces good data.
+    expect(await upsertAtlasRecords([row("DIRECT-1", "atlas-error", null)])).toBe(0);
+    // A project only Atlas has is filled in.
+    expect(await upsertAtlasRecords([row("ATLAS-ONLY-1", "atlas", older)])).toBe(1);
+    // Atlas read it more recently than we did: Atlas's wins.
+    await pool.query("UPDATE financier_api_records SET fetched_at = now() - interval '2 hours' WHERE external_id = 'DIRECT-1'");
+    expect(await upsertAtlasRecords([row("DIRECT-1", "atlas-new", new Date())])).toBe(1);
+    const v = await pool.query("SELECT external_id, raw->'loan'->>'v' AS v FROM financier_api_records WHERE external_id IN ('DIRECT-1', 'ATLAS-ONLY-1') ORDER BY 1");
+    expect(v.rows).toEqual([{ external_id: "ATLAS-ONLY-1", v: "atlas" }, { external_id: "DIRECT-1", v: "atlas-new" }]);
+    await pool.query("DELETE FROM financier_api_records WHERE external_id IN ('DIRECT-1', 'ATLAS-ONLY-1')");
   });
 
   it("a copy cut short by a restart resumes on the next tick instead of waiting out the interval", async () => {
