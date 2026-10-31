@@ -3,7 +3,7 @@
  * /api/financier-api paths, so the Atlas page could point here unchanged. Atlas checks a signed-in role; this service
  * checks an API key (src/auth.ts).
  *
- *   GET  /api/healthz                               public: process up + database answers (for Replit's health check)
+ *   GET  /api/healthz                               public: up + database, and yes/no setup checks (key, Atlas link, each lender)
  *   GET  /api/health                                key: database, migrations, scheduler, every financier's state
  *   GET  /api/financier-api/summary                 per financier: configured?, counts, last sync; sync cadence
  *   GET  /api/financier-api/:financier/records      ?page=&pageSize=&q=&onlyOk=1 → one page (flattened cells, every
@@ -29,7 +29,7 @@ import { schedulerState } from "./scheduler";
 import { atlasConfigured } from "./atlas-link";
 import { mirrorRunning, mirrorStates, startMirror, syncMode } from "./mirror";
 import { addEnfinIds, enfinSettingIds, listRecordsPage, lookupById, writeRecordsCsv, startPull, startEnfinDiscovery, summary } from "./financier-api/store";
-import { asProvider, FinancierApiError, FINANCIER_API_LABELS } from "./financier-api/types";
+import { asProvider, FinancierApiError, FINANCIER_API_LABELS, FINANCIER_API_PROVIDERS, type FinancierApiProvider } from "./financier-api/types";
 import { downloadDocument, getRecord, goodleapCaseAttachments, listDocuments, palmettoSavedDocuments } from "./financier-api/detail";
 
 export const VERSION = process.env.REPLIT_GIT_COMMIT_SHA?.slice(0, 9) ?? process.env.GIT_SHA?.slice(0, 9) ?? "dev";
@@ -64,6 +64,26 @@ async function dbPing(): Promise<{ ok: boolean; latencyMs: number; error?: strin
   }
 }
 
+async function setupChecks() {
+  const states = await mirrorStates();
+  const last = await pool.query<{ financier: string; finished: Date | null; has_data: boolean }>(
+    `SELECT f.financier, (SELECT max(finished_at) FROM financier_api_pulls p WHERE p.financier = f.financier) AS finished,
+            EXISTS (SELECT 1 FROM financier_api_records r WHERE r.financier = f.financier AND r.status = 'ok') AS has_data
+       FROM unnest($1::text[]) AS f(financier)`, [[...FINANCIER_API_PROVIDERS]]);
+  return {
+    apiKeySet: apiKeyConfigured(),
+    atlasLinkSet: atlasConfigured(),
+    syncLeader: schedulerState.leader,
+    lastTickAt: schedulerState.lastTickAt,
+    lenders: Object.fromEntries(last.rows.map((r) => [r.financier.toLowerCase(), {
+      mode: syncMode(r.financier as FinancierApiProvider),
+      hasData: r.has_data,
+      lastSyncAt: r.finished?.toISOString() ?? null,
+      lastCopyError: states[r.financier]?.lastError ? true : false,
+    }])),
+  };
+}
+
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
@@ -77,9 +97,14 @@ export function createApp() {
 
   app.get("/", (_req, res) => { res.json({ service: "financier-db", version: VERSION, health: "/api/healthz", docs: "README.md" }); });
 
+  /**
+   * Public: is it up, and is it set up? Only yes/no facts and times, so anyone setting it up can check it from a
+   * browser without the key: no counts, no ids, no customer data, never a secret.
+   */
   app.get("/api/healthz", wrap("healthz failed", async (_req, res) => {
     const d = await dbPing();
-    res.status(d.ok ? 200 : 503).json({ ok: d.ok, service: "financier-db", version: VERSION, db: d.ok ? "up" : "down" });
+    const checks = d.ok ? await setupChecks().catch(() => null) : null;
+    res.status(d.ok ? 200 : 503).json({ ok: d.ok, service: "financier-db", version: VERSION, db: d.ok ? "up" : "down", ...(checks ? { setup: checks } : {}) });
   }));
 
   app.get("/api/health", requireApiKey, wrap("health failed", async (_req, res) => {

@@ -38,7 +38,12 @@ describe.skipIf(!url)("financier-db API (real Postgres)", () => {
   it("healthz is public and says the database is up", async () => {
     const res = await request(app).get("/api/healthz");
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, service: "financier-db", db: "up" });
+    expect(res.body).toMatchObject({ ok: true, service: "financier-db", db: "up", setup: { apiKeySet: true, atlasLinkSet: false } });
+    expect(Object.keys(res.body.setup.lenders)).toEqual(["enfin", "concert", "goodleap", "palmetto", "sunrun"]);
+    expect(res.body.setup.lenders.goodleap).toMatchObject({ mode: "off", hasData: true, lastCopyError: false });
+    expect(res.body.setup.lenders.sunrun.hasData).toBe(false);
+    // Never a count, an id or a secret.
+    expect(JSON.stringify(res.body)).not.toMatch(/26-41|test-key|records/);
   });
 
   it("every other route needs the key: none → 401, wrong → 401, X-Api-Key works too", async () => {
